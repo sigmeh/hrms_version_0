@@ -1,0 +1,536 @@
+<head>
+	<meta content-type='http-equiv' content='text/html; charset=utf-8'></meta>
+	<script type='text/javascript' src='https://code.jquery.com/jquery-2.1.3.js'></script>
+	<script>
+		var showingData = false, cursorX, cursorXadj, cursorY, cursorPos, mouseIsDown = false; 
+		var fullSpecPath, zoomOrigin, figurename, xmin, xmax, ymin, ymax, spectralData;
+		var drawing = false, xminAdjusted, xmaxAdjusted, spectrumNP, RuPeaks, RuPeaksOrdered;
+		$(document).ready(function(){
+			$('#filename').click(function(){
+				$(this).select();
+			});
+			$('#clear').click(function(){
+				$('#messageBox').html('');
+			});
+		});
+//format
+		$(document).on('click','#format',function(){				//format data (need to perform only once)
+			var info = $('#filename').val();
+			$.ajax({
+				method:'post',
+				url: 'format.py',
+				data: {'package':info}
+			}).done(function(result){
+				append(result);
+			});
+//show
+		}).on('click','#show',function(){
+				spectralData = [];									//reset spectralData for first send
+				var file = $('#filename').val();
+				spectralData = [String(file), 0, 'full', 0, 100, 'NP'];
+				$.ajax({											//ajax call to show spectrum
+					method: 'post',
+					url: 'show.py',
+					data: {'spectralData':JSON.stringify(spectralData)}
+				}).done(function(result){
+					showingData = true;
+					if (result.substring(0,4) == 'File'){
+						result = $('#filename').val() + ': ' + result;
+						append(result);
+					}	
+					else{
+						spectralData = JSON.parse(result);				//redefine spectralData in callback
+						decompileData(spectralData);
+						appendSpectralData(spectralData);	
+						$('#newFig').attr('src',spectralData[0]);		//show spectrum in DOM
+						$('#sheet').css('display','block');				//display drawing sheet
+					}
+				});
+		
+		}).on('mousedown','#sheet',function(e){						//event handler for zoom detection
+			mouseIsDown = true;
+			getCursorPos(e);
+			drawZoom(e, true);
+			$('#sheet').mousemove(function(e){
+				if (mouseIsDown){
+					getCursorPos(e);
+					drawZoom(e, false);
+				}			
+			});
+//x zoom	
+		}).mouseup(function(){										//mouseup calls ajax with new parameters for spectrum display
+			mouseIsDown = false;
+			if (drawing){
+				append($('#newZoom').width());
+				var xminDesired = (xminAdjusted)*(xmax-xmin)/686 + xmin;	
+				var xmaxDesired = (xminAdjusted + $('#newZoom').width())*(xmax-xmin)/686 + xmin;
+				spectralData[0] = String($('#filename').val());
+				spectralData[1] = xminDesired;
+				spectralData[2] = xmaxDesired;
+				drawing = false;
+				for (i = 0; i < spectralData.length; i++){
+					append(spectralData[i] + ', ');
+				}
+				$.ajax({
+					method:'post',
+					url:'show.py',
+					data:{'spectralData':JSON.stringify(spectralData)}
+				}).done(function(result){
+					$('#newZoom').remove();
+					$('#messageBox').html('');
+					spectralData = JSON.parse(result);
+					$('#newFig').attr('src',spectralData[0]);
+					appendSpectralData(spectralData);
+					decompileData(spectralData);
+				});			
+			}
+		}).on('click','#diagramButton',function(){
+			//$('#diagram').attr('src','hrms.tif');
+//y zoom
+		}).on('click','.arrow',function(){
+			if (showingData){
+				if ($(this).attr('id') == 'arrow-up'){
+					if (ymax > 20){
+						ymax -= 20;
+					}
+					else{
+						ymax -= 5;
+					}
+				}
+				else{
+					ymax += 20;
+				}
+				spectralData[0] = $('#filename').val();
+				spectralData[4] = ymax;
+				$.ajax({
+					method:'post',
+					url:'show.py',
+					data:{'spectralData':JSON.stringify(spectralData)}
+				}).done(function(result){
+					$('#messageBox').html('');
+					spectralData = JSON.parse(result);
+					decompileData(spectralData);
+					append(spectralData);
+					$('#newFig').attr('src',spectralData[0]);
+				});
+			}
+//findRu
+		}).on('click','#findRu',function(){
+			var filename = $('#filename').val();
+			var threshold = $('#threshold').val();
+			var missive = [];
+			missive.push(filename);
+			missive.push(threshold);
+			var newWindow = window.open("","_blank");
+			$('#fraglist').html('');
+			$.ajax({
+				method:'post',
+				url:'findRu.py',
+				data:{'package':JSON.stringify(missive)}
+			}).done(function(result){
+				$('.fragButtons').css('display','inline-block');
+				if (result.substring(0,4) == 'File' || result.substring(0,4) == 'Done'){
+					append(filename + ': ' + result);
+				}
+				else{
+					response = JSON.parse(result);
+					RuPeaks = response;
+					append("Total Number of Ruthenium Candidates Found: " + RuPeaks.length)
+					append("Major Ruthenium Peaks Ranked by Intensity: ");
+					for (i = 0; i < RuPeaks.length; i++){
+						append('Array Pos: ' + i + '; ' + RuPeaks[i][0][0].toFixed(4));
+						$('#fraglist').append('<div><span>' + i + '</span> Peak: ' + RuPeaks[i][0][0].toFixed(4) + '</div>\n');
+					}
+					$('#fraglist div').first().attr('class','selected');
+					name = filename.substring(0, filename.length - 4);
+					newWindow.location.href = './' + name + '/' + name + '_RuCandidates.html';
+				}
+			});
+		}).on('click','#enterFragment',function(){
+		/*
+			var formula = $('#fragmentFormula').val();
+			var fragName = $('#fragmentName').val();
+			var formulaPack = [formula, fragName];
+			$.ajax({
+				method:'post',
+				url:'fragment.py',
+				data:{'formulaPack':JSON.stringify(formulaPack)}
+			}).done(function(result){
+				appendFrag(result);
+			});
+			*/
+		}).on('click','#fraglist div',function(){
+			$('.selected').removeClass('selected');
+			$(this).addClass('selected');
+		}).on('click','#fragClear',function(){
+			$('#fraglist').html('');
+//fragment					(analyze)
+		}).on('click','#analyze',function(){
+			var checkboxes = document.getElementsByClassName('checkbox');		
+			var checkFragments = [];									//get list of fragments to check
+			for (i = 0; i < checkboxes.length; i++){
+				if (checkboxes[i].checked){
+					checkFragments.push(checkboxes[i].getAttribute('id'));
+				}
+			}
+			var peakToCheck = $('#fraglist').find('.selected').find('span').html();
+			var fragPack = [];
+			fragPack.push(RuPeaks[Number(peakToCheck)]);
+			fragPack.push(checkFragments);
+			$.ajax({
+				method:'post',
+				url:'fragment.py',
+				data:{'fragPack':JSON.stringify(fragPack)}
+			}).done(function(result){
+				appendFrag(result);
+				var output = $('#fragmentsMessages').val();
+				var candidate = output.indexOf('Candidate:');
+				var end = output.indexOf('endAppend');	
+				append('output length: ' + output.length);			
+				append(output.substring(candidate,end));
+			});
+		}).on('click','#fragMessageClear',function(){
+			$('#fragmentsMessages').val('');
+		});
+		
+		//<textarea id='fragmentsMessages'></textarea>
+	//<button id='fragMessageClear'>Clear</button>
+	
+	
+		function appendSpectralData(spectralData){
+			append('File: ' + spectralData[0]);
+			append('xmin: ' + spectralData[1]);
+			append('xmax: ' + spectralData[2]);
+			append('ymin: ' + spectralData[3]);
+			append('ymax: ' + spectralData[4]);
+			append('Number of Points: ' + spectralData[5]);
+		}
+		
+		function decompileData(spectralData){
+			figurename = spectralData[0];
+			xmin = spectralData[1];
+			xmax = spectralData[2];
+			ymin = spectralData[3];
+			ymax = spectralData[4];
+			spectrumNP = spectralData[5];
+		}
+		
+		function drawZoom(e, newLine){
+			drawing = true;
+			if (mouseIsDown){
+				if (newLine){
+					var newZoom = document.createElement('div');
+					newZoom.style.marginTop = cursorY;			
+					newZoom.style.marginLeft = cursorX;
+					zoomOrigin = cursorX;
+					xminAdjusted = zoomOrigin - 80;
+					newZoom.style.height = '2px';
+					newZoom.style.width = '2px';
+					newZoom.style.backgroundColor = 'black';
+					newZoom.setAttribute('id','newZoom');
+					newZoom.style.position = 'fixed';
+					$('body').append(newZoom);
+				}
+				else{
+					if (e.pageX < 766){
+						$('#newZoom').css('width', String(e.pageX - zoomOrigin + 'px'));
+					}
+					else{
+						$('#newZoom').css('width', String(766 - zoomOrigin + 'px'));
+					}
+				}
+			}
+		}
+		
+		function getCursorPos(e){
+			if (e.pageX > 80 && e.pageX < 766 && e.pageY > 93 && e.pageY < 285){
+				cursorX = e.pageX;
+				cursorXadj = cursorX - 80;
+				cursorY = e.pageY;
+				cursorPos = cursorXadj + ', ' + cursorY;
+				$('#cursor').html(cursorPos);
+			}
+		}
+		
+		function appendFrag(data){
+			$('#fragmentsMessages').val(data);
+		}
+		
+		function append(data){
+			message = data + '<br>';
+			$('#messageBox').append(message);
+		}
+		
+	</script>
+</head>
+<body>	
+	<div id='container'>
+		<div id='optionsContainer'>
+			<span id='file'>File: </span><textarea id='filename'>VI-200.csv</textarea><br><!--Enter Filename-->
+			<button id='format'>Format Data</button>
+			<button id='show'>Show Full</button>
+			<button id='clear'>Clear Messages</button>
+			<button id='findRu'>Find Ru</button>
+			<span id='thresholdpointer'>Threshold:</span><textarea id='threshold'>20</textarea>
+		</div>
+		<div id='spectrumContainer'>	
+			<div id='sheet'></div>
+			<div id='spectrum'>
+				<img id='newFig'/>
+			</div>
+		</div>
+	</div>
+	<!--<div id='cursor'></div>-->
+	<div id='messages'><u>Messages</u></div>
+	<div id='messageBox'></div>
+	<img id='Ru2esp2SbF6' src='./Ru2esp2SbF6.png'/>
+	<img id='predicted' src='./Ru2isotopes.png'/>
+	<div id='fragmentsContainer'><u>Fragments</u><br>
+		<!--
+		Formula:<textarea id='fragmentFormula' class='fragmentText'></textarea>
+		(e.g., C 23 H 56 N 4 Ru 2)<br>
+		Name:<textarea id='fragmentName' class='fragmentText'></textarea><br><br>
+		<button id='enterFragment'>Enter Fragment</button><br>
+		-->
+		<div id='fraglistTitle'>Ru Candidates:</div>
+		<div id='fraglist'></div>
+		<input type='checkbox' class='checkbox' id='Ru' checked>Ru<br>
+		<input type='checkbox' class='checkbox' id='OPiv' checked>OPiv<br>
+		<input type='checkbox' class='checkbox' id='HOPiv'>HOPiv<br>
+		<input type='checkbox' class='checkbox' id='PhIOPiv2'>PhIOPiv2<br>
+		<input type='checkbox' class='checkbox' id='Na'>Na<br>
+		<input type='checkbox' class='checkbox' id='H2O'>H2O<br>
+		<input type='checkbox' class='checkbox' id='O'>O<br>
+		<input type='checkbox' class='checkbox' id='H'>H<br>
+		<input type='checkbox' class='checkbox' id='OH'>OH<br>
+		<input type='checkbox' class='checkbox' id='TcesNH2'>TcesNH2<br>
+		<input type='checkbox' class='checkbox' id='TcesNH'>TcesNH<br>
+		<input type='checkbox' class='checkbox' id='TcesN'>TcesN<br>
+		<input type='checkbox' class='checkbox' id='OAc'>OAc<br>
+		<input type='checkbox' class='checkbox' id='HOAc'>HOAc<br>
+		<input type='checkbox' class='checkbox' id='esp'>esp<br>
+		<input type='checkbox' class='checkbox' id='espH'>espH<br>
+		<input type='checkbox' class='checkbox' id='espH2'>espH2<br>
+		<input type='checkbox' class='checkbox' id='Cl'>Cl<br>
+		<button id='analyze' class='fragButtons'>Analyze</button>
+		<button id='fragClear' class='fragButtons'>Clear</button>
+	</div>
+	<textarea id='fragmentsMessages'></textarea>
+	<button id='fragMessageClear'>Clear</button>
+	<div id='arrowsbox'>
+		<div id='arrow-up' class='arrow'></div><br>
+		<div id='arrow-down' class='arrow'></div>
+	</div>
+	<style>	
+		#fragMessageClear{
+			margin-top:782px;
+			margin-left:750px;
+			position:fixed;
+		}
+		#fragmentsMessages{
+			margin-top: 370px;
+			margin-left:745px;
+			position:fixed;
+			font-size:12px;
+			resize:none;
+			width:400px;
+			height: 410px;
+		}
+		#messages{
+			margin-top:360px;
+			position:fixed;
+			font-size:12px;
+		}
+		#messageBox{
+			margin-top: 380px;
+			margin-left:5px;
+			position:fixed;
+			font-size:12px;
+		}
+		.fragButtons{
+			display:none;
+		}
+		#analyze{
+			margin-left:80px;
+			margin-top:24px;
+		}
+		#fragClear{
+			
+		}
+		#fraglistTitle{
+			margin-left:80px;
+		
+		}
+		.selected{
+			background-color:rgb(209,255,242);
+		}
+		#fraglist{
+			position:absolute;
+			margin-left:80px;
+			margin-top:2px;
+			height:300px;
+			width:120px;
+			border-style:solid;
+			border-color:black;
+			border-width:1px;
+			overflow-y:scroll;
+			padding:2px;	
+		}
+		#fragArrayPos{
+			resize:none;
+			width:20px;
+			height:16px;
+			vertical-align:top;
+		}
+		.checkbox{
+			margin:2px;
+		}
+		#enterFragment{
+			vertical-align:top;
+			margin-left:2px;
+		}
+		#fragmentsContainer{
+			height:400px;
+			width:280px;
+			padding:4px;
+			border-style:solid;
+			border-color:black;
+			border-width:1px;
+			position:fixed;
+			margin-top:370px;
+			margin-left:450px;
+			font-size:12px;
+		}
+		.fragmentText{
+			resize:none;
+			height:20px;
+			margin-left:2px;
+			margin-top:2px;
+			vertical-align:bottom;
+			width:100px;
+		}
+		#thresholdpointer{
+			font-size:10px;
+		}
+		#threshold{
+			resize:none;
+			height:18px;
+			width:30px;
+			vertical-align:bottom;
+		}
+		#diagram{		
+		}
+		#file{
+			font-size:13px;
+			vertical-align:top;
+		}
+		#filename{
+			resize:none;
+			height:20px	
+		}
+		body{
+	
+			-webkit-user-select: none;
+			-khtml-user-select: none;
+			-moz-user-select: -moz-none;
+			-o-user-select: none;
+			user-select: none;
+			
+		}
+		#predicted{
+			margin-top:30px;
+			margin-left:840px;	
+			width:400px;
+			position:fixed;
+		}
+		#Ru2esp2SbF6{
+			margin-top:40px;
+			margin-left:1260px;
+			height:100px;
+			width:100px;
+			position:fixed;
+		}	
+		body{
+		}
+		img{
+		}
+		#container{
+			position:fixed;
+		}	
+		*{
+			margin:0px;
+		}	
+		button{
+			margin-top:5px;
+			position:relative;
+		}
+		#show{
+		}
+		#clear{			
+		}
+		#optionsContainer{
+			position:absolute;
+			margin:5px;
+			width:900px;
+		}
+		#cursor{	
+			margin-top:360px;
+			position:fixed;
+		}	
+		#spectrumContainer{
+			position:fixed;
+			margin-top:50px;
+			margin-left:2px;
+		}
+		#sheet{
+			height:300px;
+			width:800px;
+			display:none;
+			z-index:100;
+			position:absolute;
+			margin:1px;
+		}
+		#spectrum{
+			z-index:10;
+			position:relative;
+			height:300px;
+			width:800px;
+			border-style:solid;
+			border-color:black;
+			border-width:1px;	
+		}
+		#xlabel{
+			margin:0px;
+			text-align:center;
+			width:1000px;
+		}
+		#ylabel{
+			display:inline-block;
+			vertical-align:top;
+			margin-top:90px;
+		}
+		.feedback{
+			font-size:12px;
+		}
+		#arrowsbox{
+			position:fixed;
+			display:inline-block;
+			margin-left:810px;
+			margin-top:150px;
+		}
+		#arrow-up {
+			width: 0; 
+			height: 0; 
+			border-left: 10px solid transparent;
+			border-right: 10px solid transparent;
+			border-bottom: 40px solid green;
+		}
+		#arrow-down {
+			width: 0; 
+			height: 0; 
+			border-left: 10px solid transparent;
+			border-right: 10px solid transparent;
+			border-top: 40px solid #f00;		
+		}
+	</style>
+</body>
